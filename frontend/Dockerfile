@@ -1,4 +1,4 @@
-FROM node:20-alpine
+FROM node:20-alpine AS build
 
 WORKDIR /app
 
@@ -9,8 +9,20 @@ RUN npm install
 # Copy source code
 COPY . .
 
-# Expose the port (Railway sets PORT dynamically)
+# Build with API URL baked in (Vite requires VITE_ prefix at build time)
+ARG VITE_API_URL
+ENV VITE_API_URL=${VITE_API_URL}
+RUN npm run build
+
+# Production stage - serve static files
+FROM node:20-alpine
+
+WORKDIR /app
+
+RUN npm install -g serve
+
+COPY --from=build /app/dist ./dist
+
 EXPOSE ${PORT:-3000}
 
-# Run the Vite dev server bound to all interfaces
-CMD ["sh", "-c", "npx vite --host 0.0.0.0 --port ${PORT:-3000}"]
+CMD ["sh", "-c", "serve -s dist -l ${PORT:-3000}"]
