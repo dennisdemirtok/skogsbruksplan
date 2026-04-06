@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
-from app.core.database import engine
+from app.core.database import Base, engine
 
 logger = logging.getLogger("skogsplan")
 
@@ -18,6 +18,13 @@ async def lifespan(app: FastAPI):
     )
     logger.info("Starting SkogsplanSaaS backend...")
     logger.info(f"Database: {settings.DATABASE_URL.split('@')[-1] if '@' in settings.DATABASE_URL else 'configured'}")
+
+    # Auto-create tables if they don't exist
+    import app.models  # noqa: F401 — ensure all models are imported
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    logger.info("Database tables verified/created.")
+
     yield
     logger.info("Shutting down SkogsplanSaaS backend...")
     await engine.dispose()
