@@ -1,0 +1,109 @@
+version: "3.9"
+
+services:
+  db:
+    image: postgis/postgis:16-3.4
+    container_name: skogsplan-db
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: skogsplan
+      POSTGRES_USER: skogsplan
+      POSTGRES_PASSWORD: skogsplan
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/init-db.sql:/docker-entrypoint-initdb.d/01-init.sql
+    networks:
+      - skogsplan-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U skogsplan -d skogsplan"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: skogsplan-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - skogsplan-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: skogsplan-backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+      - raster_data:/app/data
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://skogsplan:skogsplan@db:5432/skogsplan
+      REDIS_URL: redis://redis:6379/0
+    networks:
+      - skogsplan-net
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: skogsplan-frontend
+    restart: unless-stopped
+    ports:
+      - "5173:3000"
+    depends_on:
+      - backend
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    networks:
+      - skogsplan-net
+
+  nginx:
+    image: nginx:alpine
+    container_name: skogsplan-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - backend
+      - frontend
+    networks:
+      - skogsplan-net
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  raster_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./data
+
+networks:
+  skogsplan-net:
+    driver: bridge

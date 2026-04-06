@@ -1,0 +1,96 @@
+# =============================================================
+# SkogsplanSaaS .gitignore
+# =============================================================
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+*.egg
+dist/
+build/
+.eggs/
+*.whl
+pip-log.txt
+pip-delete-this-directory.txt
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# --- Virtual environments ---
+venv/
+.venv/
+env/
+ENV/
+
+# --- Node / Frontend ---
+node_modules/
+.vite/
+dist/
+*.local
+.eslintcache
+.npm
+.yarn/
+
+# --- Environment files ---
+.env
+.env.local
+.env.*.local
+!.env.example
+!backend/.env.example
+
+# --- Docker ---
+docker-compose.override.yml
+
+# --- Database ---
+*.sql.backup
+*.dump
+
+# --- IDE / Editor ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# --- Geospatial / Raster data ---
+*.tif
+*.tiff
+*.laz
+*.las
+*.shp
+*.shx
+*.dbf
+*.prj
+*.cpg
+*.gpkg
+data/rasters/
+data/uploads/
+data/pdfs/
+
+# --- Logs ---
+*.log
+logs/
+
+# --- OS ---
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Desktop.ini
+
+# --- Alembic ---
+alembic/versions/*.pyc
+
+# --- Misc ---
+*.bak
+*.tmp
+*.temp
