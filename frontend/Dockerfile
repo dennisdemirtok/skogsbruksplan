@@ -9,8 +9,8 @@ RUN npm install
 # Copy source code
 COPY . .
 
-# Expose the Vite dev server port
-EXPOSE 5173
+# Expose the port (Railway sets PORT dynamically)
+EXPOSE ${PORT:-3000}
 
 # Run the Vite dev server bound to all interfaces
-CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"]
+CMD ["sh", "-c", "npx vite --host 0.0.0.0 --port ${PORT:-3000}"]
