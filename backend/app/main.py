@@ -21,9 +21,12 @@ async def lifespan(app: FastAPI):
 
     # Auto-create tables if they don't exist
     import app.models  # noqa: F401 — ensure all models are imported
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    logger.info("Database tables verified/created.")
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        logger.info("Database tables verified/created.")
+    except Exception as e:
+        logger.warning(f"Auto-create tables failed (may already exist): {e}")
 
     yield
     logger.info("Shutting down SkogsplanSaaS backend...")
