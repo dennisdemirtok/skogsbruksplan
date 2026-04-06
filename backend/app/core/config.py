@@ -10,6 +10,14 @@ class Settings(BaseSettings):
     # Database
     DATABASE_URL: str = "postgresql+asyncpg://skogsplan:skogsplan@localhost:5432/skogsplan"
 
+    @property
+    def async_database_url(self) -> str:
+        """Ensure DATABASE_URL uses asyncpg driver (Railway provides postgresql://)."""
+        url = self.DATABASE_URL
+        if url.startswith("postgresql://"):
+            url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
+        return url
+
     # JWT Authentication
     SECRET_KEY: str = "change-this-to-a-real-secret-key-in-production"
     ALGORITHM: str = "HS256"
