@@ -1,11 +1,11 @@
+import json
 import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from geoalchemy2.shape import from_shape, to_shape
 from pydantic import BaseModel
-from shapely.geometry import shape
+from shapely.geometry import mapping, shape
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -26,6 +26,16 @@ from app.utils.geo import (
 )
 
 router = APIRouter(prefix="/stands", tags=["stands"])
+
+
+def _geom_text_to_shape(geom_text: str):
+    """Convert stored GeoJSON text to a Shapely shape."""
+    return shape(json.loads(geom_text))
+
+
+def _shape_to_geom_text(shp) -> str:
+    """Convert a Shapely shape to GeoJSON text for storage."""
+    return json.dumps(mapping(shp))
 
 
 class StandCreateRequest(BaseModel):
@@ -139,7 +149,7 @@ def stand_to_geojson_feature(stand: Stand) -> StandGeoJSONFeature:
     geojson = None
     if stand.geometry is not None:
         try:
-            shp = to_shape(stand.geometry)
+            shp = _geom_text_to_shape(stand.geometry)
             wgs84_geom = sweref99_to_wgs84(shp)
             geojson = geometry_to_geojson(wgs84_geom)
         except Exception:
@@ -182,7 +192,7 @@ def stand_to_response(stand: Stand) -> StandResponse:
     geojson = None
     if stand.geometry is not None:
         try:
-            shp = to_shape(stand.geometry)
+            shp = _geom_text_to_shape(stand.geometry)
             wgs84_geom = sweref99_to_wgs84(shp)
             geojson = geometry_to_geojson(wgs84_geom)
         except Exception:
@@ -249,13 +259,13 @@ async def create_stand(
 ):
     await _verify_property_access(request.property_id, current_user, db)
 
-    geometry_wkb = None
+    geometry_text = None
     area = request.area_ha
 
     if request.geometry_geojson:
         shp = shape(request.geometry_geojson)
         shp_3006 = wgs84_to_sweref99(shp)
-        geometry_wkb = from_shape(shp_3006, srid=3006)
+        geometry_text = _shape_to_geom_text(shp_3006)
         if area is None:
             area = calculate_area_ha(shp_3006)
 
@@ -263,7 +273,7 @@ async def create_stand(
         id=uuid.uuid4(),
         property_id=request.property_id,
         stand_number=request.stand_number,
-        geometry=geometry_wkb,
+        geometry=geometry_text,
         area_ha=area,
         volume_m3_per_ha=request.volume_m3_per_ha,
         total_volume_m3=request.total_volume_m3,
@@ -401,7 +411,7 @@ async def update_stand(
     if geometry_geojson is not None:
         shp = shape(geometry_geojson)
         shp_3006 = wgs84_to_sweref99(shp)
-        stand.geometry = from_shape(shp_3006, srid=3006)
+        stand.geometry = _shape_to_geom_text(shp_3006)
         if "area_ha" not in update_data:
             stand.area_ha = calculate_area_ha(shp_3006)
 

@@ -2,7 +2,6 @@ import enum
 import uuid
 from datetime import datetime, timezone
 
-from geoalchemy2 import Geometry
 from sqlalchemy import (
     Boolean,
     DateTime,
@@ -57,8 +56,7 @@ class Stand(Base):
     )
     stand_number: Mapped[int] = mapped_column(Integer, nullable=False)
     geometry = mapped_column(
-        Geometry(geometry_type="POLYGON", srid=3006, spatial_index=True),
-        nullable=True,
+        Text, nullable=True, comment="GeoJSON geometry (POLYGON, SRID 3006)"
     )
     area_ha: Mapped[float | None] = mapped_column(Float, nullable=True)
 

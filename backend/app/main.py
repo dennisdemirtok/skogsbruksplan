@@ -27,12 +27,18 @@ async def lifespan(app: FastAPI):
     try:
         async with engine.begin() as conn:
             # Create required PostgreSQL extensions one by one
-            for ext in ['postgis', '"uuid-ossp"', 'pg_trgm']:
+            for ext in ['"uuid-ossp"', 'pg_trgm']:
                 try:
                     await conn.execute(sa_text(f'CREATE EXTENSION IF NOT EXISTS {ext}'))
                     logger.info(f"Extension {ext} OK")
                 except Exception as ext_err:
                     logger.warning(f"Extension {ext} failed: {ext_err}")
+            # Try PostGIS but don't fail if not available
+            try:
+                await conn.execute(sa_text('CREATE EXTENSION IF NOT EXISTS postgis'))
+                logger.info("Extension postgis OK")
+            except Exception:
+                logger.warning("PostGIS not available — geometry stored as GeoJSON text")
             # Check which extensions are available
             result = await conn.execute(sa_text("SELECT extname FROM pg_extension"))
             exts = [row[0] for row in result]

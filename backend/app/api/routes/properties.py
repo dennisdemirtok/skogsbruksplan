@@ -1,9 +1,9 @@
+import json
 import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from geoalchemy2.shape import from_shape, to_shape
 from pydantic import BaseModel
 from shapely.geometry import mapping, shape
 from sqlalchemy import select
@@ -19,6 +19,7 @@ from app.utils.geo import (
     calculate_area_ha,
     geometry_to_geojson,
     sweref99_to_wgs84,
+    wgs84_to_sweref99,
 )
 
 router = APIRouter(prefix="/properties", tags=["properties"])
@@ -59,11 +60,21 @@ class PropertyResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+def _geom_text_to_shape(geom_text: str):
+    """Convert stored GeoJSON text to a Shapely shape."""
+    return shape(json.loads(geom_text))
+
+
+def _shape_to_geom_text(shp) -> str:
+    """Convert a Shapely shape to GeoJSON text for storage."""
+    return json.dumps(mapping(shp))
+
+
 def property_to_response(prop: Property) -> PropertyResponse:
     boundary = None
     if prop.geometry is not None:
         try:
-            shp = to_shape(prop.geometry)
+            shp = _geom_text_to_shape(prop.geometry)
             wgs84_geom = sweref99_to_wgs84(shp)
             geojson_geom = geometry_to_geojson(wgs84_geom)
             boundary = {
@@ -98,16 +109,15 @@ async def create_property(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    geometry_wkb = None
+    geometry_text = None
     total_area = request.total_area_ha
     municipality = request.municipality
     county = request.county
 
     if request.geometry_geojson:
         shp = shape(request.geometry_geojson)
-        from app.utils.geo import wgs84_to_sweref99
         shp_3006 = wgs84_to_sweref99(shp)
-        geometry_wkb = from_shape(shp_3006, srid=3006)
+        geometry_text = _shape_to_geom_text(shp_3006)
         if total_area is None:
             total_area = calculate_area_ha(shp_3006)
     else:
@@ -115,9 +125,8 @@ async def create_property(
         lookup_result = await client.lookup_property(request.designation)
         if lookup_result and lookup_result.get("geometry"):
             geom = shape(lookup_result["geometry"])
-            from app.utils.geo import wgs84_to_sweref99
             geom_3006 = wgs84_to_sweref99(geom)
-            geometry_wkb = from_shape(geom_3006, srid=3006)
+            geometry_text = _shape_to_geom_text(geom_3006)
             if total_area is None:
                 total_area = calculate_area_ha(geom_3006)
             if municipality is None:
@@ -132,7 +141,7 @@ async def create_property(
         designation=request.designation,
         municipality=municipality,
         county=county,
-        geometry=geometry_wkb,
+        geometry=geometry_text,
         total_area_ha=total_area,
         productive_forest_ha=request.productive_forest_ha,
         owner_id=owner_id,
@@ -217,9 +226,8 @@ async def update_property(
         prop.productive_forest_ha = request.productive_forest_ha
     if request.geometry_geojson is not None:
         shp = shape(request.geometry_geojson)
-        from app.utils.geo import wgs84_to_sweref99
         shp_3006 = wgs84_to_sweref99(shp)
-        prop.geometry = from_shape(shp_3006, srid=3006)
+        prop.geometry = _shape_to_geom_text(shp_3006)
         if request.total_area_ha is None:
             prop.total_area_ha = calculate_area_ha(shp_3006)
 

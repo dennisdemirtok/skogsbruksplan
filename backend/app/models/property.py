@@ -1,7 +1,6 @@
 import uuid
 from datetime import datetime, timezone
 
-from geoalchemy2 import Geometry
 from sqlalchemy import DateTime, Float, ForeignKey, String, Text, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -24,8 +23,7 @@ class Property(Base):
     municipality: Mapped[str] = mapped_column(String(255), nullable=True)
     county: Mapped[str] = mapped_column(String(255), nullable=True)
     geometry = mapped_column(
-        Geometry(geometry_type="MULTIPOLYGON", srid=3006, spatial_index=True),
-        nullable=True,
+        Text, nullable=True, comment="GeoJSON geometry (MULTIPOLYGON, SRID 3006)"
     )
     total_area_ha: Mapped[float | None] = mapped_column(Float, nullable=True)
     productive_forest_ha: Mapped[float | None] = mapped_column(Float, nullable=True)
