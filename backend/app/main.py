@@ -97,6 +97,24 @@ async def health_check():
     }
 
 
+@app.get("/debug/db", tags=["debug"])
+async def debug_db():
+    from sqlalchemy import text as sa_text
+    try:
+        async with engine.connect() as conn:
+            result = await conn.execute(sa_text(
+                "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' ORDER BY table_name"
+            ))
+            tables = [row[0] for row in result]
+            ext_result = await conn.execute(sa_text(
+                "SELECT extname FROM pg_extension ORDER BY extname"
+            ))
+            extensions = [row[0] for row in ext_result]
+            return {"tables": tables, "extensions": extensions}
+    except Exception as e:
+        return {"error": str(e)}
+
+
 @app.get("/", tags=["root"])
 async def root():
     return {
