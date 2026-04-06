@@ -25,25 +25,25 @@ async def lifespan(app: FastAPI):
     import app.models  # noqa: F401 — ensure all models are imported
     from sqlalchemy import text as sa_text
     try:
-        async with engine.begin() as conn:
-            # Create required PostgreSQL extensions one by one
-            for ext in ['"uuid-ossp"', 'pg_trgm']:
-                try:
+        # Each extension in its own transaction to avoid aborted-transaction cascade
+        for ext in ['"uuid-ossp"', 'pg_trgm']:
+            try:
+                async with engine.begin() as conn:
                     await conn.execute(sa_text(f'CREATE EXTENSION IF NOT EXISTS {ext}'))
                     logger.info(f"Extension {ext} OK")
-                except Exception as ext_err:
-                    logger.warning(f"Extension {ext} failed: {ext_err}")
-            # Try PostGIS but don't fail if not available
-            try:
+            except Exception as ext_err:
+                logger.warning(f"Extension {ext} failed: {ext_err}")
+
+        # Try PostGIS separately — Railway Postgres doesn't have it
+        try:
+            async with engine.begin() as conn:
                 await conn.execute(sa_text('CREATE EXTENSION IF NOT EXISTS postgis'))
                 logger.info("Extension postgis OK")
-            except Exception:
-                logger.warning("PostGIS not available — geometry stored as GeoJSON text")
-            # Check which extensions are available
-            result = await conn.execute(sa_text("SELECT extname FROM pg_extension"))
-            exts = [row[0] for row in result]
-            logger.info(f"Available extensions: {exts}")
-            # Create all tables
+        except Exception:
+            logger.warning("PostGIS not available — geometry stored as GeoJSON text")
+
+        # Create all tables
+        async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         logger.info("Database tables verified/created.")
     except Exception as e:
