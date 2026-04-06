@@ -8,10 +8,12 @@ from app.core.config import settings
 from app.core.database import Base, engine
 
 logger = logging.getLogger("skogsplan")
+db_init_error = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global db_init_error
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -24,17 +26,24 @@ async def lifespan(app: FastAPI):
     from sqlalchemy import text as sa_text
     try:
         async with engine.begin() as conn:
-            # Create required PostgreSQL extensions
-            await conn.execute(sa_text('CREATE EXTENSION IF NOT EXISTS postgis'))
-            await conn.execute(sa_text('CREATE EXTENSION IF NOT EXISTS "uuid-ossp"'))
-            await conn.execute(sa_text('CREATE EXTENSION IF NOT EXISTS pg_trgm'))
-            logger.info("PostgreSQL extensions verified.")
+            # Create required PostgreSQL extensions one by one
+            for ext in ['postgis', '"uuid-ossp"', 'pg_trgm']:
+                try:
+                    await conn.execute(sa_text(f'CREATE EXTENSION IF NOT EXISTS {ext}'))
+                    logger.info(f"Extension {ext} OK")
+                except Exception as ext_err:
+                    logger.warning(f"Extension {ext} failed: {ext_err}")
+            # Check which extensions are available
+            result = await conn.execute(sa_text("SELECT extname FROM pg_extension"))
+            exts = [row[0] for row in result]
+            logger.info(f"Available extensions: {exts}")
             # Create all tables
             await conn.run_sync(Base.metadata.create_all)
         logger.info("Database tables verified/created.")
     except Exception as e:
+        db_init_error = str(e)
         logger.error(f"Database initialization failed: {e}")
-        raise
+        # Don't raise — let the app start so we can debug via /debug/db-error
 
     yield
     logger.info("Shutting down SkogsplanSaaS backend...")
@@ -100,19 +109,20 @@ async def health_check():
 @app.get("/debug/db", tags=["debug"])
 async def debug_db():
     from sqlalchemy import text as sa_text
+    info = {"startup_error": db_init_error}
     try:
         async with engine.connect() as conn:
             result = await conn.execute(sa_text(
                 "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' ORDER BY table_name"
             ))
-            tables = [row[0] for row in result]
+            info["tables"] = [row[0] for row in result]
             ext_result = await conn.execute(sa_text(
                 "SELECT extname FROM pg_extension ORDER BY extname"
             ))
-            extensions = [row[0] for row in ext_result]
-            return {"tables": tables, "extensions": extensions}
+            info["extensions"] = [row[0] for row in ext_result]
     except Exception as e:
-        return {"error": str(e)}
+        info["query_error"] = str(e)
+    return info
 
 
 @app.get("/", tags=["root"])
