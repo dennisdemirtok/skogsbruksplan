@@ -19,14 +19,22 @@ async def lifespan(app: FastAPI):
     logger.info("Starting SkogsplanSaaS backend...")
     logger.info(f"Database: {settings.DATABASE_URL.split('@')[-1] if '@' in settings.DATABASE_URL else 'configured'}")
 
-    # Auto-create tables if they don't exist
+    # Ensure extensions and tables exist
     import app.models  # noqa: F401 — ensure all models are imported
+    from sqlalchemy import text as sa_text
     try:
         async with engine.begin() as conn:
+            # Create required PostgreSQL extensions
+            await conn.execute(sa_text('CREATE EXTENSION IF NOT EXISTS postgis'))
+            await conn.execute(sa_text('CREATE EXTENSION IF NOT EXISTS "uuid-ossp"'))
+            await conn.execute(sa_text('CREATE EXTENSION IF NOT EXISTS pg_trgm'))
+            logger.info("PostgreSQL extensions verified.")
+            # Create all tables
             await conn.run_sync(Base.metadata.create_all)
         logger.info("Database tables verified/created.")
     except Exception as e:
-        logger.warning(f"Auto-create tables failed (may already exist): {e}")
+        logger.error(f"Database initialization failed: {e}")
+        raise
 
     yield
     logger.info("Shutting down SkogsplanSaaS backend...")
