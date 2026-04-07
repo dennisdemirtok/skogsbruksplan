@@ -1,4 +1,5 @@
 import json
+import logging
 import uuid
 from datetime import datetime, timezone
 from typing import Optional
@@ -10,17 +11,25 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.config import settings
 from app.core.database import get_db
 from app.core.security import get_current_user
 from app.models.property import Property
+from app.models.stand import Stand
 from app.models.user import User
+from app.services.action_engine import ActionEngine
+from app.services.economic_calculator import EconomicCalculator
+from app.services.forest_estimator import estimate_stand_data
 from app.services.lantmateriet_client import LantmaterietClient
+from app.services.raster_service import RasterService
 from app.utils.geo import (
     calculate_area_ha,
     geometry_to_geojson,
     sweref99_to_wgs84,
     wgs84_to_sweref99,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/properties", tags=["properties"])
 
@@ -153,7 +162,135 @@ async def create_property(
     await db.flush()
     await db.refresh(prop)
 
+    # Auto-create an initial stand covering the full property
+    if geometry_text and total_area and total_area > 0:
+        try:
+            await _create_initial_stand(
+                db=db,
+                prop=prop,
+                geometry_text=geometry_text,
+                area_ha=total_area,
+                municipality=municipality,
+                county=county,
+                designation=request.designation,
+            )
+            logger.info(f"Auto-created initial stand for property {prop.designation}")
+        except Exception as e:
+            logger.warning(f"Failed to auto-create stand: {e}")
+            # Don't fail property creation if stand creation fails
+
     return property_to_response(prop)
+
+
+async def _create_initial_stand(
+    db: AsyncSession,
+    prop: Property,
+    geometry_text: str,
+    area_ha: float,
+    municipality: str = None,
+    county: str = None,
+    designation: str = None,
+):
+    """Create an initial stand covering the full property boundary.
+
+    Tries raster data first, falls back to regional estimates.
+    Then calculates economics and proposes management actions.
+    """
+    # Try to get forest data from rasters first
+    stand_data = None
+    try:
+        shp_3006 = _geom_text_to_shape(geometry_text)
+        raster_svc = RasterService(settings.RASTER_DATA_PATH)
+        stand_data = raster_svc.get_stand_data_from_rasters(
+            shp_3006.wkt, settings.RASTER_DATA_PATH
+        )
+    except Exception as e:
+        logger.debug(f"Raster extraction failed: {e}")
+
+    # Fallback: estimate from regional averages
+    if not stand_data or all(v is None for v in stand_data.values()):
+        stand_data = estimate_stand_data(
+            area_ha=area_ha,
+            municipality=municipality,
+            county=county,
+            designation=designation,
+        )
+        data_source = "auto"
+    else:
+        data_source = "auto"
+
+    # Convert polygon to single-part for stand (use same geometry as property)
+    # Stand geometry stored in same format as property
+    stand_geometry = geometry_text
+
+    now = datetime.now(timezone.utc)
+    stand = Stand(
+        id=uuid.uuid4(),
+        property_id=prop.id,
+        stand_number=1,
+        geometry=stand_geometry,
+        area_ha=area_ha,
+        volume_m3_per_ha=stand_data.get("volume_m3_per_ha"),
+        total_volume_m3=stand_data.get("total_volume_m3"),
+        mean_height_m=stand_data.get("mean_height_m"),
+        basal_area_m2=stand_data.get("basal_area_m2"),
+        mean_diameter_cm=stand_data.get("mean_diameter_cm"),
+        age_years=stand_data.get("age_years"),
+        site_index=stand_data.get("site_index"),
+        pine_pct=stand_data.get("pine_pct"),
+        spruce_pct=stand_data.get("spruce_pct"),
+        deciduous_pct=stand_data.get("deciduous_pct"),
+        contorta_pct=stand_data.get("contorta_pct"),
+        target_class="PG",
+        data_source=data_source,
+        field_verified=False,
+        created_at=now,
+        updated_at=now,
+    )
+
+    # Calculate total volume if not set
+    if stand.volume_m3_per_ha and stand.area_ha:
+        if not stand.total_volume_m3:
+            stand.total_volume_m3 = round(stand.volume_m3_per_ha * stand.area_ha, 1)
+
+    # Propose management action
+    try:
+        stand_dict = {
+            "area_ha": stand.area_ha,
+            "volume_m3_per_ha": stand.volume_m3_per_ha,
+            "total_volume_m3": stand.total_volume_m3,
+            "mean_height_m": stand.mean_height_m,
+            "basal_area_m2": stand.basal_area_m2,
+            "mean_diameter_cm": stand.mean_diameter_cm,
+            "age_years": stand.age_years,
+            "site_index": stand.site_index,
+            "pine_pct": stand.pine_pct or 0,
+            "spruce_pct": stand.spruce_pct or 0,
+            "deciduous_pct": stand.deciduous_pct or 0,
+            "contorta_pct": stand.contorta_pct or 0,
+            "target_class": "PG",
+            "proposed_action": "ingen",
+            "bark_beetle_risk": 0,
+        }
+
+        engine = ActionEngine()
+        action_result = engine.propose_action(stand_dict)
+        stand.proposed_action = action_result["action"]
+        stand.action_urgency = action_result["urgency"]
+
+        # Calculate economics
+        calculator = EconomicCalculator()
+        economics = calculator.calculate_stand_economics(stand_dict)
+        stand.timber_volume_m3 = economics["timber_volume_m3"]
+        stand.pulpwood_volume_m3 = economics["pulpwood_volume_m3"]
+        stand.gross_value_sek = economics["gross_value_sek"]
+        stand.harvesting_cost_sek = economics["harvesting_cost_sek"]
+        stand.net_value_sek = economics["net_value_sek"]
+    except Exception as e:
+        logger.warning(f"Economics/action calculation failed: {e}")
+
+    db.add(stand)
+    await db.flush()
 
 
 @router.get("", response_model=list[PropertyResponse])
