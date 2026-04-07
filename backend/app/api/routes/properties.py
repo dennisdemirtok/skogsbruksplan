@@ -22,6 +22,7 @@ from app.services.economic_calculator import EconomicCalculator
 from app.services.forest_estimator import estimate_stand_data
 from app.services.lantmateriet_client import LantmaterietClient
 from app.services.raster_service import RasterService
+from app.services.skogsstyrelsen_client import SkogsstyrelsenClient
 from app.utils.geo import (
     calculate_area_ha,
     geometry_to_geojson,
@@ -182,6 +183,86 @@ async def create_property(
     return property_to_response(prop)
 
 
+def _parse_skogsstyrelsen_response(result: dict) -> dict | None:
+    """Parse Skogsstyrelsen API response into stand data fields.
+
+    The API may return Swedish field names or normalized names.
+    Returns None if no usable data found.
+    """
+    if not result:
+        return None
+
+    # Handle nested "data" structure (from fallback or wrapped responses)
+    data = result.get("data", result)
+
+    # If it's the fallback with all None values, skip
+    if isinstance(data, dict) and all(
+        v is None for k, v in data.items()
+        if k not in ("species_distribution", "source", "message")
+    ):
+        return None
+
+    # Map Swedish API field names → our internal names
+    field_map = {
+        # Swedish names from Skogsstyrelsen API
+        "virkesforrad": "volume_m3_per_ha",
+        "virkesförråd": "volume_m3_per_ha",
+        "medelhojd": "mean_height_m",
+        "medelhöjd": "mean_height_m",
+        "grundyta": "basal_area_m2",
+        "medeldiameter": "mean_diameter_cm",
+        "alder": "age_years",
+        "ålder": "age_years",
+        "bonitet": "site_index",
+        "si": "site_index",
+        "tall_andel": "pine_pct",
+        "tall": "pine_pct",
+        "gran_andel": "spruce_pct",
+        "gran": "spruce_pct",
+        "lov_andel": "deciduous_pct",
+        "löv_andel": "deciduous_pct",
+        "lov": "deciduous_pct",
+        "löv": "deciduous_pct",
+        "contorta_andel": "contorta_pct",
+        "contorta": "contorta_pct",
+        # Already normalized names (from fallback format)
+        "volume_m3_per_ha": "volume_m3_per_ha",
+        "mean_height_m": "mean_height_m",
+        "basal_area_m2": "basal_area_m2",
+        "mean_diameter_cm": "mean_diameter_cm",
+        "age_years": "age_years",
+        "site_index": "site_index",
+        "pine_pct": "pine_pct",
+        "spruce_pct": "spruce_pct",
+        "deciduous_pct": "deciduous_pct",
+        "contorta_pct": "contorta_pct",
+    }
+
+    parsed = {}
+    for api_key, our_key in field_map.items():
+        if api_key in data and data[api_key] is not None:
+            try:
+                parsed[our_key] = float(data[api_key])
+            except (ValueError, TypeError):
+                pass
+
+    # Handle nested species_distribution
+    species = data.get("species_distribution", {})
+    if species:
+        for sp_key in ("pine_pct", "spruce_pct", "deciduous_pct", "contorta_pct"):
+            if sp_key in species and species[sp_key] is not None:
+                try:
+                    parsed[sp_key] = float(species[sp_key])
+                except (ValueError, TypeError):
+                    pass
+
+    # Need at least volume or height to be useful
+    if "volume_m3_per_ha" not in parsed and "mean_height_m" not in parsed:
+        return None
+
+    return parsed
+
+
 async def _create_initial_stand(
     db: AsyncSession,
     prop: Property,
@@ -193,31 +274,57 @@ async def _create_initial_stand(
 ):
     """Create an initial stand covering the full property boundary.
 
-    Tries raster data first, falls back to regional estimates.
+    Data source priority:
+    1. Skogsstyrelsen API (real laser scanning data)
+    2. Local raster GeoTIFFs (Skogliga grunddata)
+    3. Regional estimates (SLU Riksskogstaxeringen averages)
+
     Then calculates economics and proposes management actions.
     """
-    # Try to get forest data from rasters first
     stand_data = None
+    data_source = "estimate"
+
+    # 1. Try Skogsstyrelsen API first (REAL data from laser scanning)
     try:
         shp_3006 = _geom_text_to_shape(geometry_text)
-        raster_svc = RasterService(settings.RASTER_DATA_PATH)
-        stand_data = raster_svc.get_stand_data_from_rasters(
-            shp_3006.wkt, settings.RASTER_DATA_PATH
-        )
-    except Exception as e:
-        logger.debug(f"Raster extraction failed: {e}")
+        wgs84_geom = sweref99_to_wgs84(shp_3006)
+        polygon_geojson = geometry_to_geojson(wgs84_geom)
 
-    # Fallback: estimate from regional averages
-    if not stand_data or all(v is None for v in stand_data.values()):
+        sks_client = SkogsstyrelsenClient()
+        sks_result = await sks_client.get_forest_data(polygon_geojson)
+        parsed = _parse_skogsstyrelsen_response(sks_result)
+        if parsed:
+            stand_data = parsed
+            data_source = "skogsstyrelsen"
+            logger.info(f"Got REAL forest data from Skogsstyrelsen for {designation}")
+    except Exception as e:
+        logger.warning(f"Skogsstyrelsen API failed: {e}")
+
+    # 2. Try local raster data (GeoTIFFs)
+    if not stand_data:
+        try:
+            shp_3006 = _geom_text_to_shape(geometry_text)
+            raster_svc = RasterService(settings.RASTER_DATA_PATH)
+            raster_result = raster_svc.get_stand_data_from_rasters(
+                shp_3006.wkt, settings.RASTER_DATA_PATH
+            )
+            if raster_result and not all(v is None for v in raster_result.values()):
+                stand_data = raster_result
+                data_source = "raster"
+                logger.info(f"Got forest data from rasters for {designation}")
+        except Exception as e:
+            logger.debug(f"Raster extraction failed: {e}")
+
+    # 3. Fallback: estimate from regional averages
+    if not stand_data:
         stand_data = estimate_stand_data(
             area_ha=area_ha,
             municipality=municipality,
             county=county,
             designation=designation,
         )
-        data_source = "auto"
-    else:
-        data_source = "auto"
+        data_source = "estimate"
+        logger.info(f"Using regional estimates for {designation}")
 
     # Convert polygon to single-part for stand (use same geometry as property)
     # Stand geometry stored in same format as property
