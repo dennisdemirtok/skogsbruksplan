@@ -23,8 +23,11 @@ class Settings(BaseSettings):
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440
 
-    # Skogsstyrelsen API
+    # Skogsstyrelsen API (OAuth2 client credentials)
     SKOGSSTYRELSEN_API_BASE: str = "https://api.skogsstyrelsen.se/skogligagrunddata/v2"
+    SKOGSSTYRELSEN_TOKEN_URL: str = "https://api.skogsstyrelsen.se/oauth2/token"
+    SKOGSSTYRELSEN_CLIENT_ID: str = ""
+    SKOGSSTYRELSEN_CLIENT_SECRET: str = ""
 
     # Lantmateriet API — Fastighetsindelning Direkt (OGC API Features)
     LANTMATERIET_API_BASE: str = "https://api.lantmateriet.se/ogc-features/v1/fastighetsindelning"
