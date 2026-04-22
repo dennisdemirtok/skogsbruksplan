@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from pydantic import BaseModel
 from shapely.geometry import mapping, shape
 from sqlalchemy import select
@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.config import settings
-from app.core.database import get_db
+from app.core.database import async_session_factory, get_db
 from app.core.security import get_current_user
 from app.models.property import Property
 from app.models.stand import Stand
@@ -116,6 +116,7 @@ def property_to_response(prop: Property) -> PropertyResponse:
 @router.post("", response_model=PropertyResponse, status_code=status.HTTP_201_CREATED)
 async def create_property(
     request: PropertyCreateRequest,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -162,32 +163,58 @@ async def create_property(
     db.add(prop)
     await db.flush()
     await db.refresh(prop)
-    # Commit the property immediately so it's never rolled back by
-    # downstream stand-creation errors (Skogsstyrelsen API, etc.)
-    await db.commit()
-    await db.refresh(prop)
 
-    # Auto-create an initial stand covering the full property.
-    # Runs in a separate transaction — if it fails, the property is
-    # already persisted and the user can still see it.
+    # Schedule stand auto-creation AFTER the response is sent.
+    # Runs with its own DB session so failures here never affect the
+    # property creation transaction.
     if geometry_text and total_area and total_area > 0:
+        background_tasks.add_task(
+            _background_create_stand,
+            prop_id=prop.id,
+            geometry_text=geometry_text,
+            area_ha=total_area,
+            municipality=municipality,
+            county=county,
+            designation=request.designation,
+        )
+
+    return property_to_response(prop)
+
+
+async def _background_create_stand(
+    prop_id: uuid.UUID,
+    geometry_text: str,
+    area_ha: float,
+    municipality: Optional[str],
+    county: Optional[str],
+    designation: str,
+):
+    """Background-task wrapper that opens its own DB session."""
+    async with async_session_factory() as db:
         try:
+            # Re-fetch property in new session to attach to this transaction
+            result = await db.execute(
+                select(Property).where(Property.id == prop_id)
+            )
+            prop = result.scalar_one_or_none()
+            if prop is None:
+                logger.warning(f"Property {prop_id} not found in background task")
+                return
+
             await _create_initial_stand(
                 db=db,
                 prop=prop,
                 geometry_text=geometry_text,
-                area_ha=total_area,
+                area_ha=area_ha,
                 municipality=municipality,
                 county=county,
-                designation=request.designation,
+                designation=designation,
             )
             await db.commit()
-            logger.info(f"Auto-created initial stand for property {prop.designation}")
+            logger.info(f"[bg] Auto-created stand for property {designation}")
         except Exception as e:
             await db.rollback()
-            logger.warning(f"Failed to auto-create stand for {prop.designation}: {e}")
-
-    return property_to_response(prop)
+            logger.warning(f"[bg] Stand creation failed for {designation}: {e}")
 
 
 async def _create_initial_stand(
