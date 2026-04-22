@@ -288,13 +288,29 @@ async def _create_initial_stand(
                 if v is not None and not k.startswith("_")}
         if real.get("volume_m3_per_ha") or real.get("mean_height_m"):
             stand_data = real
-            data_source = "skogsstyrelsen"
+            data_source = "sks"  # VARCHAR(10) constraint in DB
             logger.info(
                 f"Got REAL Skogsstyrelsen data for {designation}: "
                 f"volym={real.get('volume_m3_per_ha')} m³sk/ha, "
                 f"höjd={real.get('mean_height_m')} m, "
                 f"grundyta={real.get('basal_area_m2')} m²/ha"
             )
+            # Skogsstyrelsen Volym endpoint returns only aggregate stats — no
+            # species split, age, or site index. Supplement those from
+            # regional estimates so the economic calculator has something
+            # to work with.
+            sup = estimate_stand_data(
+                area_ha=area_ha,
+                municipality=municipality,
+                county=county,
+                designation=designation,
+            )
+            for supplemental_key in (
+                "age_years", "site_index",
+                "pine_pct", "spruce_pct", "deciduous_pct", "contorta_pct",
+            ):
+                if stand_data.get(supplemental_key) is None:
+                    stand_data[supplemental_key] = sup.get(supplemental_key)
     except Exception as e:
         logger.warning(f"Skogsstyrelsen API failed for {designation}: {e}")
 
