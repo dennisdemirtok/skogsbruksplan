@@ -162,8 +162,14 @@ async def create_property(
     db.add(prop)
     await db.flush()
     await db.refresh(prop)
+    # Commit the property immediately so it's never rolled back by
+    # downstream stand-creation errors (Skogsstyrelsen API, etc.)
+    await db.commit()
+    await db.refresh(prop)
 
-    # Auto-create an initial stand covering the full property
+    # Auto-create an initial stand covering the full property.
+    # Runs in a separate transaction — if it fails, the property is
+    # already persisted and the user can still see it.
     if geometry_text and total_area and total_area > 0:
         try:
             await _create_initial_stand(
@@ -175,10 +181,11 @@ async def create_property(
                 county=county,
                 designation=request.designation,
             )
+            await db.commit()
             logger.info(f"Auto-created initial stand for property {prop.designation}")
         except Exception as e:
-            logger.warning(f"Failed to auto-create stand: {e}")
-            # Don't fail property creation if stand creation fails
+            await db.rollback()
+            logger.warning(f"Failed to auto-create stand for {prop.designation}: {e}")
 
     return property_to_response(prop)
 
