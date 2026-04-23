@@ -15,6 +15,9 @@ import {
   DollarSign,
   Clipboard,
   MapPin,
+  Info,
+  CheckCircle2,
+  Satellite,
 } from 'lucide-react';
 import clsx from 'clsx';
 
@@ -107,7 +110,7 @@ export default function StandPanel({ propertyId, standId, onClose }: StandPanelP
     <div className="absolute right-0 top-0 z-30 flex h-full w-[400px] flex-col border-l border-gray-200 bg-white shadow-lg">
       {/* Header */}
       <div className="flex items-center justify-between border-b border-gray-200 px-4 py-3">
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-2">
           <h2 className="text-lg font-bold text-gray-800">
             Avdelning {stand.standNumber}
           </h2>
@@ -119,6 +122,7 @@ export default function StandPanel({ propertyId, standId, onClose }: StandPanelP
               {stand.targetClass}
             </span>
           )}
+          <DataSourceBadge dataSource={stand.dataSource} fieldVerified={stand.fieldVerified} />
         </div>
         <button
           onClick={onClose}
@@ -158,6 +162,7 @@ export default function StandPanel({ propertyId, standId, onClose }: StandPanelP
               register={register}
               autoFilling={autoFilling}
               onAutoFill={handleAutoFill}
+              dataSource={stand.dataSource}
             />
           )}
           {activeTab === 'actions' && (
@@ -252,13 +257,44 @@ function ForestDataTab({
   register,
   autoFilling,
   onAutoFill,
+  dataSource,
 }: {
   register: ReturnType<typeof useForm<Partial<Stand>>>['register'];
   autoFilling: boolean;
   onAutoFill: () => void;
+  dataSource: string | null | undefined;
 }) {
+  const fromLaser = dataSource === 'skogsstyrelsen' || dataSource === 'raster';
   return (
     <div className="space-y-4">
+      {/* Info banner explaining data quality */}
+      <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-xs text-blue-900">
+        <div className="flex items-start gap-2">
+          <Info className="mt-0.5 h-4 w-4 shrink-0 text-blue-600" />
+          <div className="space-y-1.5">
+            <p className="font-semibold">Om datavärdena</p>
+            {fromLaser ? (
+              <>
+                <p>
+                  <span className="font-medium">Laserskannat (exakt):</span> Volym, höjd, grundyta, diameter
+                </p>
+                <p>
+                  <span className="font-medium">Uppskattat (regionalt medel):</span> Ålder, bonitet, trädslagsfördelning
+                </p>
+                <p className="italic">
+                  Komplettera manuellt från fältinventering för exakt skogsbruksplan.
+                  Ekonomin räknas om automatiskt när du sparar.
+                </p>
+              </>
+            ) : (
+              <p>
+                Alla värden är regionala uppskattningar. Uppdatera manuellt från din skogsbruksplan eller fältinventering för att förbättra noggrannheten.
+              </p>
+            )}
+          </div>
+        </div>
+      </div>
+
       <button
         type="button"
         onClick={onAutoFill}
@@ -269,16 +305,28 @@ function ForestDataTab({
         {autoFilling ? 'Hämtar geodata...' : 'Fyll i automatiskt från geodata'}
       </button>
 
-      <FieldGroup label="Grunddata">
+      <FieldGroup
+        label={fromLaser ? 'Grunddata (från laserskanning)' : 'Grunddata'}
+        badge={fromLaser ? 'laser' : null}
+      >
         <FormField label="Volym (m\u00b3sk/ha)" name="volumeM3PerHa" type="number" register={register} />
         <FormField label="Grundyta (m\u00b2/ha)" name="basalAreaM2" type="number" register={register} />
         <FormField label="Medelhöjd (m)" name="meanHeightM" type="number" register={register} />
         <FormField label="Medeldiameter (cm)" name="meanDiameterCm" type="number" register={register} />
+      </FieldGroup>
+
+      <FieldGroup
+        label="Beståndsdata (kompletteras manuellt)"
+        badge={fromLaser ? 'estimate' : null}
+      >
         <FormField label="Ålder (år)" name="ageYears" type="number" register={register} />
         <FormField label="Ståndortsindex" name="siteIndex" type="number" register={register} />
       </FieldGroup>
 
-      <FieldGroup label="Trädslag (%)">
+      <FieldGroup
+        label="Trädslag (% — kompletteras manuellt)"
+        badge={fromLaser ? 'estimate' : null}
+      >
         <FormField label="Tall" name="pinePct" type="number" register={register} />
         <FormField label="Gran" name="sprucePct" type="number" register={register} />
         <FormField label="Löv" name="deciduousPct" type="number" register={register} />
@@ -443,7 +491,15 @@ function FieldDataTab({ fieldData }: { fieldData: FieldData[] }) {
 
 /* ───────── Shared form components ───────── */
 
-function FieldGroup({ label, children }: { label: string; children: React.ReactNode }) {
+function FieldGroup({
+  label,
+  children,
+  badge,
+}: {
+  label: string;
+  children: React.ReactNode;
+  badge?: 'laser' | 'estimate' | null;
+}) {
   const [open, setOpen] = useState(true);
   return (
     <div className="rounded-lg border border-gray-200">
@@ -452,11 +508,76 @@ function FieldGroup({ label, children }: { label: string; children: React.ReactN
         onClick={() => setOpen(!open)}
         className="flex w-full items-center justify-between px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50"
       >
-        {label}
+        <span className="flex items-center gap-2">
+          {label}
+          {badge === 'laser' && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-sky-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-sky-700">
+              <Satellite className="h-3 w-3" /> Laser
+            </span>
+          )}
+          {badge === 'estimate' && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-700">
+              Uppskattat
+            </span>
+          )}
+        </span>
         <ChevronDown className={clsx('h-4 w-4 text-gray-400 transition', open && 'rotate-180')} />
       </button>
       {open && <div className="space-y-3 px-3 pb-3">{children}</div>}
     </div>
+  );
+}
+
+/* ───────── Data Source Badge (header) ───────── */
+
+function DataSourceBadge({
+  dataSource,
+  fieldVerified,
+}: {
+  dataSource: string | null | undefined;
+  fieldVerified: boolean | undefined;
+}) {
+  if (fieldVerified) {
+    return (
+      <span
+        className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-700"
+        title="Värden har verifierats manuellt"
+      >
+        <CheckCircle2 className="h-3 w-3" /> Verifierad
+      </span>
+    );
+  }
+  if (dataSource === 'skogsstyrelsen') {
+    return (
+      <span
+        className="inline-flex items-center gap-1 rounded-full bg-sky-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-sky-700"
+        title="Huvudvärden från Skogsstyrelsens laserskanning"
+      >
+        <Satellite className="h-3 w-3" /> Laserdata
+      </span>
+    );
+  }
+  if (dataSource === 'raster') {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-sky-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-sky-700">
+        <Satellite className="h-3 w-3" /> Rasterdata
+      </span>
+    );
+  }
+  if (dataSource === 'manual') {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-700">
+        <CheckCircle2 className="h-3 w-3" /> Manuell
+      </span>
+    );
+  }
+  return (
+    <span
+      className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-700"
+      title="Regional uppskattning — komplettera manuellt för exakta värden"
+    >
+      Uppskattat
+    </span>
   );
 }
 

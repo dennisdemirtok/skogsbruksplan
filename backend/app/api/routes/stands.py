@@ -415,8 +415,24 @@ async def update_stand(
         if "area_ha" not in update_data:
             stand.area_ha = calculate_area_ha(shp_3006)
 
+    # Track whether any forestry/measurement field was manually edited —
+    # if so, mark the stand as field-verified so the UI can show a badge.
+    forestry_fields = {
+        "volume_m3_per_ha", "mean_height_m", "basal_area_m2",
+        "mean_diameter_cm", "age_years", "site_index",
+        "pine_pct", "spruce_pct", "deciduous_pct", "contorta_pct",
+    }
+    user_edited_forestry = any(f in update_data for f in forestry_fields)
+
     for field, value in update_data.items():
         setattr(stand, field, value)
+
+    if user_edited_forestry:
+        stand.field_verified = True
+        # Mark the overall data source as manual unless user explicitly
+        # passed data_source in the request
+        if "data_source" not in update_data:
+            stand.data_source = "manual"
 
     if stand.volume_m3_per_ha is not None and stand.area_ha is not None:
         stand.total_volume_m3 = round(stand.volume_m3_per_ha * stand.area_ha, 1)
