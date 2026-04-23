@@ -341,21 +341,57 @@ export const fieldDataApi = {
 
 /* ───────── Economics & Analytics ───────── */
 // Backend routes: /properties/{id}/economics, /properties/{id}/actions, /properties/{id}/summary
+// Analytics endpoints return snake_case; recursively convert keys to camelCase.
+
+function snakeToCamel(str: string): string {
+  return str.replace(/_([a-z0-9])/g, (_m, c: string) => c.toUpperCase());
+}
+
+function toCamel<T = unknown>(value: unknown): T {
+  if (Array.isArray(value)) {
+    return value.map((v) => toCamel(v)) as unknown as T;
+  }
+  if (value !== null && typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      out[snakeToCamel(k)] = toCamel(v);
+    }
+    return out as T;
+  }
+  return value as T;
+}
 
 export const economicsApi = {
   getPropertyEconomics: async (propertyId: string): Promise<EconomicData> => {
-    const { data } = await api.get<EconomicData>(`/properties/${propertyId}/economics`);
-    return data;
+    const { data } = await api.get(`/properties/${propertyId}/economics`);
+    return toCamel<EconomicData>(data);
   },
 
   getActionProposals: async (propertyId: string): Promise<ActionProposal[]> => {
-    const { data } = await api.get<ActionProposal[]>(`/properties/${propertyId}/actions`);
-    return data;
+    // Backend: { property_id, total_stands, stands_with_actions, actions: StandAction[] }
+    // Unwrap .actions and remap {action,urgency} → {proposedAction,actionUrgency}
+    // which don't follow the simple snake→camel rule.
+    const { data } = await api.get<{ actions: Record<string, unknown>[] }>(
+      `/properties/${propertyId}/actions`,
+    );
+    const camelActions = toCamel<Array<Record<string, unknown>>>(data.actions ?? []);
+    return camelActions.map((a) => ({
+      standId: a.standId as string,
+      standNumber: a.standNumber as number,
+      areaHa: a.areaHa as number,
+      proposedAction: a.action as ActionProposal['proposedAction'],
+      actionUrgency: a.urgency as number | null,
+      actionYear: a.actionYear as number | null,
+      reasoning: (a.reasoning as string) ?? '',
+      timberVolumeM3: a.timberVolumeM3 as number | null,
+      pulpwoodVolumeM3: a.pulpwoodVolumeM3 as number | null,
+      netValueSek: a.netValueSek as number | null,
+    }));
   },
 
   getPropertySummary: async (propertyId: string): Promise<Record<string, unknown>> => {
     const { data } = await api.get(`/properties/${propertyId}/summary`);
-    return data as Record<string, unknown>;
+    return toCamel<Record<string, unknown>>(data);
   },
 };
 
