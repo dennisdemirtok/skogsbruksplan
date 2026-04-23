@@ -46,6 +46,19 @@ async def lifespan(app: FastAPI):
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         logger.info("Database tables verified/created.")
+
+        # Lightweight schema migrations — SQLAlchemy create_all does NOT
+        # alter existing columns. Add ALTERs here for column widenings.
+        migrations = [
+            "ALTER TABLE stands ALTER COLUMN data_source TYPE VARCHAR(30)",
+        ]
+        for mig in migrations:
+            try:
+                async with engine.begin() as conn:
+                    await conn.execute(sa_text(mig))
+                logger.info(f"Migration OK: {mig}")
+            except Exception as mig_err:
+                logger.debug(f"Migration skipped ({mig}): {mig_err}")
     except Exception as e:
         db_init_error = str(e)
         logger.error(f"Database initialization failed: {e}")

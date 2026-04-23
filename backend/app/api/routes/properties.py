@@ -113,39 +113,6 @@ def property_to_response(prop: Property) -> PropertyResponse:
     )
 
 
-@router.post("/{property_id}/create-stand-debug")
-async def debug_create_stand(
-    property_id: uuid.UUID,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """Debug endpoint: manually trigger stand creation and return the error."""
-    import traceback
-    result = await db.execute(select(Property).where(Property.id == property_id))
-    prop = result.scalar_one_or_none()
-    if prop is None:
-        return {"error": "Property not found"}
-    try:
-        await _create_initial_stand(
-            db=db,
-            prop=prop,
-            geometry_text=prop.geometry,
-            area_ha=prop.total_area_ha or 0,
-            municipality=prop.municipality,
-            county=prop.county,
-            designation=prop.designation,
-        )
-        await db.commit()
-        return {"ok": True, "message": "Stand created"}
-    except Exception as e:
-        await db.rollback()
-        return {
-            "error": str(e),
-            "type": type(e).__name__,
-            "traceback": traceback.format_exc(),
-        }
-
-
 @router.post("", response_model=PropertyResponse, status_code=status.HTTP_201_CREATED)
 async def create_property(
     request: PropertyCreateRequest,
@@ -288,7 +255,7 @@ async def _create_initial_stand(
                 if v is not None and not k.startswith("_")}
         if real.get("volume_m3_per_ha") or real.get("mean_height_m"):
             stand_data = real
-            data_source = "sks"  # VARCHAR(10) constraint in DB
+            data_source = "skogsstyrelsen"
             logger.info(
                 f"Got REAL Skogsstyrelsen data for {designation}: "
                 f"volym={real.get('volume_m3_per_ha')} m³sk/ha, "

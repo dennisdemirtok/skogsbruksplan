@@ -115,7 +115,7 @@ class Stand(Base):
 
     # Meta
     data_source: Mapped[str | None] = mapped_column(
-        String(10), nullable=True, default="auto"
+        String(30), nullable=True, default="auto"
     )
     field_verified: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False
